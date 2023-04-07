@@ -32,6 +32,7 @@ _all_solvers = [
     SCIP_PY,
     HiGHS,
     HiGHS_CMD,
+    Z3_PY
 ]
 
 import json
