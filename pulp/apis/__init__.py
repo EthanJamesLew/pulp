@@ -8,6 +8,7 @@ from .mosek_api import *
 from .scip_api import *
 from .xpress_api import *
 from .highs_api import *
+from .z3_api import *
 from .core import *
 
 _all_solvers = [
