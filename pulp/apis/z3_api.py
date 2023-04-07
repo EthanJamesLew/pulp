@@ -66,33 +66,39 @@ class Z3_PY(LpSolver):
         
         def callSolver(self, lp):
             z3Solver = z3.Solver()
-            for constraint in lp.constraints.values():
-                z3Solver.add(constraint.z3Constraint)
+            for constraint in self.z3Constraints:
+                z3Solver.add(constraint)
             z3Solver.check()
             lp.Z3SolveStatus = z3Solver
         
         def buildSolverModel(self, lp):
             # TODO: make a model context so these variables aren't added to LpModel items
+            # TODO: attend to bounds
+            self.z3Constraints = []
             for var in lp.variables():
                 if var.cat == constants.LpInteger:
                     var.z3Var = z3.Int(var.name)
+                    self.z3Constraints.append(var.z3Var >= var.lowBound)
+                    self.z3Constraints.append(var.z3Var <= var.upBound)
                 elif var.cat == constants.LpContinuous:
                     var.z3Var = z3.Real(var.name)
+                    self.z3Constraints.append(var.z3Var >= var.lowBound)
+                    self.z3Constraints.append(var.z3Var <= var.upBound)
                 else:
                     raise ValueError("Z3: Variable type not supported")
                 
-            for _, constraint in lp.constraints.items():
+            for constraint in lp.constraints.values():
                 expr = []
                 for v, coefficient in constraint.items():
                     expr.append(coefficient * v.z3Var)
 
                 rhs = -constraint.constant
                 if constraint.sense == constants.LpConstraintEQ:
-                    constraint.z3Constraint = z3.Sum(expr) == rhs 
+                    self.z3Constraints.append(sum(expr) == rhs) 
                 elif constraint.sense == constants.LpConstraintLE:
-                    constraint.z3Constraint = z3.Sum(expr) <= rhs 
+                    self.z3Constraints.append(sum(expr) <= rhs)
                 else:
-                    constraint.z3Constraint = z3.Sum(expr) >= rhs 
+                    self.z3Constraints.append(sum(expr) >= rhs)
 
         def findSolutionValues(self, lp):
             model = lp.Z3SolveStatus.model()
