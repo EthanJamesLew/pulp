@@ -23,9 +23,75 @@
 # Implemented by Ethan Lew (@EthanJamesLew on Github)
 # Users would need to install Z3 and the Python bindings (z3-solver on PyPI) on their machine and provide the path to the executable.
 # More instructions on: https://github.com/Z3Prover/z3
+import pathlib
 
 from pulp import constants
 from .core import LpSolver, PulpSolverError
+
+
+class Z3Model:
+    """z3 objects for a lp model"""
+    def __init__(
+            self, 
+            timeout: int,
+            logPath: str,
+        ) -> None:
+        self.constraints = []
+        self.variables = {}
+        self.solver = None 
+        self.model = None
+        self.timeout = timeout
+        self.logPath = logPath
+
+    def addVariable(self, variable):
+        """add a variable to the model"""
+        self.variables[variable.decl().name()] = variable
+
+    def addConstraint(self, constraint):
+        """add a constraint to the model"""
+        self.constraints.append(constraint)
+        
+    def getVariable(self, name):
+        """get variable from its identifier"""
+        return self.variables[name]
+    
+    def getSolver(self):
+        """return a configured Z3 solver"""
+        solver = z3.Solver()
+        if self.timeout is not None:
+            solver.set("timeout", self.timeout)
+        if self.logPath is not None:
+            logPath = pathlib.Path(self.logPath)
+            solver.set("smtlib2_log", str(logPath / "z3.smt2"))
+            solver.set("proof.log", str(logPath / "z3.proof"))
+        return solver
+    
+    def solve(self):
+        """run the Z3 solver"""
+        self.solver = self.getSolver() 
+        for constraint in self.constraints:
+            self.solver.add(constraint)
+        status = self.solver.check()
+        if status.r > 0:
+            self.model = self.solver.model()
+        return self.solver
+    
+    @property
+    def status(self):
+        """get the status of the solved model"""
+        if self.model is None:
+            reason = self.solver.reason_unknown()
+            if reason == "timeout":
+                return constants.LpStatusNotSolved
+            else:
+                return constants.LpStatusInfeasible
+        return constants.LpStatusOptimal 
+    
+    def getVariableValue(self, variable):
+        """get the value of a variable of solved model"""
+        if self.model is None:
+            raise RuntimeError("Z3 Model has not been satisfied yet")
+        return self.model[variable]
 
 
 class Z3_PY(LpSolver):
@@ -58,6 +124,7 @@ class Z3_PY(LpSolver):
             logPath=None,
             **solverParams,
         ):
+            self.logPath = logPath
             super().__init__(mip, msg, timeLimit=timeLimit, **solverParams)
 
         def available(self):
@@ -65,48 +132,43 @@ class Z3_PY(LpSolver):
             return True
         
         def callSolver(self, lp):
-            z3Solver = z3.Solver()
-            for constraint in self.z3Constraints:
-                z3Solver.add(constraint)
-            z3Solver.check()
-            lp.Z3SolveStatus = z3Solver
+            lp.solverModel.solve()
         
         def buildSolverModel(self, lp):
-            # TODO: make a model context so these variables aren't added to LpModel items
-            # TODO: attend to bounds
-            self.z3Constraints = []
+            lp.solverModel = Z3Model(self.timeLimit, self.logPath)
             for var in lp.variables():
                 if var.cat == constants.LpInteger:
-                    var.z3Var = z3.Int(var.name)
-                    self.z3Constraints.append(var.z3Var >= var.lowBound)
-                    self.z3Constraints.append(var.z3Var <= var.upBound)
+                    z3Var = z3.Int(var.name)
                 elif var.cat == constants.LpContinuous:
-                    var.z3Var = z3.Real(var.name)
-                    self.z3Constraints.append(var.z3Var >= var.lowBound)
-                    self.z3Constraints.append(var.z3Var <= var.upBound)
+                    z3Var = z3.Real(var.name)
                 else:
-                    raise ValueError("Z3: Variable type not supported")
+                    raise ValueError(f"Z3: Variable type {var.cat} not supported")
+                lp.solverModel.addVariable(z3Var)
+                # can we do bounds better than this?
+                lp.solverModel.addConstraint(z3Var >= var.lowBound)
+                lp.solverModel.addConstraint(z3Var <= var.upBound)
                 
             for constraint in lp.constraints.values():
                 expr = []
                 for v, coefficient in constraint.items():
-                    expr.append(coefficient * v.z3Var)
+                    expr.append(coefficient * lp.solverModel.getVariable(v.name))
 
                 rhs = -constraint.constant
                 if constraint.sense == constants.LpConstraintEQ:
-                    self.z3Constraints.append(sum(expr) == rhs) 
+                    constr = sum(expr) == rhs
                 elif constraint.sense == constants.LpConstraintLE:
-                    self.z3Constraints.append(sum(expr) <= rhs)
+                    constr = sum(expr) <= rhs
                 else:
-                    self.z3Constraints.append(sum(expr) >= rhs)
+                    constr = sum(expr) >= rhs
+                lp.solverModel.addConstraint(constr)
 
         def findSolutionValues(self, lp):
-            model = lp.Z3SolveStatus.model()
-            for var in lp.variables():
-                var.varValue = model[var.z3Var]
-            # TODO: get the status
-            # TODO: this really shouldn't be optimal, but feasible
-            return constants.LpStatusOptimal
+            if lp.solverModel.status != constants.LpStatusOptimal:
+                return lp.solverModel.status
+            else:
+                for var in lp.variables():
+                    var.varValue = lp.solverModel.model[lp.solverModel.getVariable(var.name)]
+                return constants.LpStatusOptimal
         
         def actualSolve(self, lp):
             self.buildSolverModel(lp)
@@ -123,4 +185,4 @@ class Z3_PY(LpSolver):
             return solutionStatus
         
         def actualResolve(self, lp, **kwargs):
-            raise NotImplementedError
+            raise PulpSolverError("Z3: Resolving is not supported")
