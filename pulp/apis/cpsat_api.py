@@ -25,6 +25,7 @@
 # More instructions on: https://developers.google.com/optimization
 
 
+from pulp import constants
 from pulp.apis.core import LpSolver, PulpSolverError
 
 
@@ -34,8 +35,8 @@ class CPSAT_PY(LpSolver):
     name: str = "CPSAT_PY"
 
     try:
-        global ortools
-        import ortools
+        global cp_model 
+        from ortools.sat.python import cp_model
 
     except:
 
@@ -52,6 +53,7 @@ class CPSAT_PY(LpSolver):
         @staticmethod
         def isSatProblem(lp):
             """Checks if the problem is a SAT problem"""
+            # TODO: Z3 also has this--should we hoist it?
             names = set(var.name for var in lp.objective.keys()) - {'__dummy'}
             return len(names) == 0
         
@@ -72,7 +74,9 @@ class CPSAT_PY(LpSolver):
             return True
         
         def callSolver(self, lp):
-            lp.solverModel.solve()
+            solver = cp_model.CpSolver()
+            lp.cpSatSolver = solver
+            lp.solverStatus = solver.Solve(lp.solverModel)
 
         def buildSolverModel(self, lp):
             # if an object is specified, warn the user that it is not supported
@@ -80,10 +84,51 @@ class CPSAT_PY(LpSolver):
                 import warnings
                 warnings.warn("CPSAT_PY: Objective has terms. CP-SAT supports only SAT problems.")
 
-            raise NotImplementedError
+            lp.solverModel = cp_model.CpModel()
+            lp.modelVars = {}
+
+            # Create the variables
+            for var in lp.variables():
+                if var.cat == constants.LpInteger:
+                    lp.modelVars[var.name] = lp.solverModel.NewIntVar(var.lowBound, var.upBound, var.name)
+                elif var.cat == constants.LpContinuous:
+                    if var.name != "__dummy":
+                        raise ValueError(f"CPSAT_PY: Continuous variables are not supported")
+                else:
+                    raise ValueError(f"CPSAT_PY: Variable type {var.cat} not supported")
+            
+            # Create the constraints
+            for constraint in lp.constraints.values():
+                constr = self.buildLinearExpr(lp, constraint)
+                lp.solverModel.Add(constr)
+
+        def buildLinearExpr(self, lp, constraint):
+            expr = []
+            for v, coefficient in constraint.items():
+                expr.append(coefficient * lp.modelVars[v.name])
+
+            rhs = -constraint.constant
+            if constraint.sense == constants.LpConstraintEQ:
+                constr = sum(expr) == rhs
+            elif constraint.sense == constants.LpConstraintLE:
+                constr = sum(expr) <= rhs
+            else:
+                constr = sum(expr) >= rhs
+            return constr
 
         def findSolutionValues(self, lp):
-            raise NotImplementedError
+            statusMap = {
+                cp_model.FEASIBLE: constants.LpStatusOptimal,
+                cp_model.INFEASIBLE: constants.LpStatusInfeasible,
+                cp_model.OPTIMAL: constants.LpStatusOptimal,
+                cp_model.MODEL_INVALID: constants.LpStatusUndefined,
+                cp_model.UNKNOWN: constants.LpStatusUndefined,
+            }
+            if lp.solverStatus == cp_model.OPTIMAL:
+                for var in lp.variables():
+                    if var.name != "__dummy":
+                        var.varValue = lp.cpSatSolver.Value(lp.modelVars[var.name])
+            return statusMap[lp.solverStatus]
         
         def actualSolve(self, lp):
             self.buildSolverModel(lp)
