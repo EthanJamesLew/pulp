@@ -1,5 +1,6 @@
 from .coin_api import *
 from .cplex_api import *
+from .cpsat_api import *
 from .gurobi_api import *
 from .glpk_api import *
 from .choco_api import *
@@ -16,6 +17,7 @@ _all_solvers = [
     PYGLPK,
     CPLEX_CMD,
     CPLEX_PY,
+    CPSAT_PY,
     GUROBI,
     GUROBI_CMD,
     MOSEK,
