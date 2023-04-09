@@ -79,11 +79,6 @@ class CPSAT_PY(LpSolver):
             lp.solverStatus = solver.Solve(lp.solverModel)
 
         def buildSolverModel(self, lp):
-            # if an object is specified, warn the user that it is not supported
-            if not self.isSatProblem(lp):
-                import warnings
-                warnings.warn("CPSAT_PY: Objective has terms. CP-SAT supports only SAT problems.")
-
             lp.solverModel = cp_model.CpModel()
             lp.modelVars = {}
 
@@ -99,21 +94,32 @@ class CPSAT_PY(LpSolver):
             
             # Create the constraints
             for constraint in lp.constraints.values():
-                constr = self.buildLinearExpr(lp, constraint)
+                constr = self.buildConstraint(lp, constraint)
                 lp.solverModel.Add(constr)
+
+            # Add the objective
+            if not self.isSatProblem(lp):
+                expr = self.buildLinearExpr(lp, lp.objective)
+                if lp.sense == constants.LpMaximize:
+                    lp.solverModel.Maximize(expr)
+                else:
+                    lp.solverModel.Minimize(expr)
 
         def buildLinearExpr(self, lp, constraint):
             expr = []
             for v, coefficient in constraint.items():
                 expr.append(coefficient * lp.modelVars[v.name])
-
+            return sum(expr)
+        
+        def buildConstraint(self, lp, constraint):
+            expr = self.buildLinearExpr(lp, constraint)
             rhs = -constraint.constant
             if constraint.sense == constants.LpConstraintEQ:
-                constr = sum(expr) == rhs
+                constr = expr == rhs
             elif constraint.sense == constants.LpConstraintLE:
-                constr = sum(expr) <= rhs
+                constr = expr <= rhs
             else:
-                constr = sum(expr) >= rhs
+                constr = expr >= rhs
             return constr
 
         def findSolutionValues(self, lp):
