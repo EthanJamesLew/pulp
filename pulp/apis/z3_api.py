@@ -115,6 +115,12 @@ class Z3_PY(LpSolver):
     
     else:
         
+        @staticmethod
+        def isSatProblem(lp):
+            """Checks if the problem is a SAT problem"""
+            names = set(var.name for var in lp.objective.keys()) - {'__dummy'}
+            return len(names) == 0
+        
         def __init__(
             self,
             mip=True,
@@ -133,8 +139,13 @@ class Z3_PY(LpSolver):
         
         def callSolver(self, lp):
             lp.solverModel.solve()
-        
+
         def buildSolverModel(self, lp):
+            # if an object is specified, warn the user that it is not supported
+            if not self.isSatProblem(lp):
+                import warnings
+                warnings.warn("Z3_PY: Objective has terms. Z3 supports only SAT problems.")
+
             lp.solverModel = Z3Model(self.timeLimit, self.logPath)
             for var in lp.variables():
                 if var.cat == constants.LpInteger:
